@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Social Studio · Meta Scheduler</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+</head>
+
+<body>
+    <section id="login" class="login">
+        <form id="loginForm" class="login-card"><span class="brandmark">S</span>
+            <p class="eyebrow">YOUR CONTENT, ON YOUR SCHEDULE</p>
+            <h1>Welcome to<br>Social Studio.</h1>
+            <p class="muted">Your private Facebook & Instagram publishing workspace.</p><label for="password">Workspace
+                password</label><input type="password" id="password" autocomplete="current-password" required><button
+                class="primary">Open workspace →</button>
+            <p id="loginError" role="alert"></p>
+        </form>
+    </section>
+    <div id="workspace" hidden>
+        <aside><a class="brand" href="/"> <span class="brandmark">S</span> Social Studio<span class="small">META
+                    SCHEDULER</span></a>
+            <p class="nav-label">WORKSPACE</p>
+            <nav><button data-view="overview" class="nav active">◫ &nbsp; Overview</button><button data-view="compose"
+                    class="nav">＋ &nbsp; Create post</button><button data-view="queue" class="nav">▤ &nbsp; Content
+                    queue</button><button data-view="calendar" class="nav">▦ &nbsp; Calendar</button><button
+                    data-view="accounts" class="nav">◎ &nbsp; Accounts</button><button data-view="activity"
+                    class="nav">↗ &nbsp; Activity</button></nav>
+            <div class="aside-bottom"><span class="dot"></span> Local workspace<p>One post. Three destinations.</p>
+                <button id="logout" class="ghost">Sign out</button></div>
+        </aside>
+        <main>
+            <header>
+                <div>
+                    <p class="eyebrow">PLAN. CREATE. KEEP SHOWING UP.</p>
+                    <h1 id="viewTitle">Your publishing workspace</h1>
+                </div><button class="primary" id="newPost">＋ Create post</button>
+            </header>
+            <div class="notice"><strong>Meta API connection pending</strong><span>You can plan and schedule now.
+                    Publishing stays blocked until you implement the adapter.</span></div>
+            <section id="overview" class="view">
+                <div class="hero">
+                    <div><span class="pill">A LITTLE PLANNING GOES A LONG WAY</span>
+                        <h2>Make space for<br>your next great post.</h2>
+                        <p>Organize your ideas, choose your accounts, and let your schedule take shape.</p><button
+                            class="dark" id="heroCompose">Create something →</button>
+                    </div>
+                    <div class="hero-art" aria-hidden="true">
+                        <div class="art-card"><span>YOUR NEXT POST</span>
+                            <div class="art-lines"></div><strong>Ready when<br>you are.</strong><span
+                                class="art-bottom">Facebook &nbsp; • &nbsp; Instagram</span>
+                        </div>
+                        <div class="orbit">✳</div>
+                    </div>
+                </div>
+                <div id="stats" class="stats"></div>
+                <div class="section-heading">
+                    <h2>Coming up next</h2><button id="seeQueue" class="ghost">View queue →</button>
+                </div>
+                <div id="upcoming"></div>
+            </section>
+            <section id="compose" class="view" hidden>
+                <div class="composer-grid">
+                    <form id="postForm" class="panel">
+                        <div class="section-heading">
+                            <h2 id="composeTitle">Create a post</h2><button type="button" id="resetPost"
+                                class="ghost">Clear</button>
+                        </div><label>Publish to <span class="muted">· choose up to 3</span></label>
+                        <div id="accountChoices" class="account-choices"></div><label
+                            for="caption">Caption</label><textarea id="caption" rows="7" maxlength="2200"
+                            placeholder="What would you like to share?" required></textarea>
+                        <div class="input-foot"><span>Keep it clear. Make it yours.</span><span id="charCount">0 /
+                                2200</span></div><label for="mediaFile">Image or video</label>
+                        <div class="upload"><input id="mediaFile" type="file" accept="image/jpeg,image/png,video/mp4">
+                            <p>JPEG, PNG or MP4 · up to 25 MB · one media item</p><span id="mediaName"></span><button
+                                id="removeMedia" class="ghost" type="button" hidden>Remove media</button>
+                        </div>
+                        <div class="two-cols">
+                            <div><label for="scheduleTime">Publish date & time</label><input id="scheduleTime"
+                                    type="datetime-local"></div>
+                            <div><label for="zone">Timezone</label><select id="zone"></select></div>
+                        </div>
+                        <p class="muted fine">Times are stored in UTC and displayed in your selected timezone. Server
+                            must remain running.</p>
+                        <div class="actions"><button type="button" id="saveDraft" class="secondary">Save
+                                draft</button><button type="submit" class="primary" id="scheduleBtn">Schedule post
+                                →</button></div>
+                    </form>
+                    <div>
+                        <div class="section-heading">
+                            <h2>Post preview</h2><span class="muted fine">Illustrative preview</span>
+                        </div>
+                        <div class="preview">
+                            <div class="preview-head">
+                                <div class="avatar">S</div>
+                                <div><strong id="previewAccount">Your account</strong><small>Scheduled post ·
+                                        Preview</small></div><span>•••</span>
+                            </div>
+                            <p id="previewCaption">Your caption will appear here.</p>
+                            <div id="previewMedia" class="preview-placeholder">✳<span>Your next story starts
+                                    here.</span></div>
+                            <div class="preview-footer">♡ &nbsp; ◯ &nbsp; ↗ <span>▱</span></div>
+                        </div>
+                        <div class="tip"><strong>One idea, multiple accounts.</strong>
+                            <p>Each destination gets its own delivery status, so you can see exactly what needs
+                                attention.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            <section id="queue" class="view" hidden>
+                <div class="section-heading">
+                    <h2>All your content</h2><select id="queueFilter" aria-label="Filter posts">
+                        <option value="all">All posts</option>
+                        <option value="draft">Drafts</option>
+                        <option value="pending">Scheduled</option>
+                        <option value="published">Published</option>
+                        <option value="attention">Needs attention</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+                <div id="queueList"></div>
+            </section>
+            <section id="calendar" class="view" hidden>
+                <div class="section-heading">
+                    <h2 id="monthTitle"></h2>
+                    <div><button id="previousMonth" class="secondary" aria-label="Previous month">←</button><button
+                            id="nextMonth" class="secondary" aria-label="Next month">→</button></div>
+                </div>
+                <p class="muted">Calendar uses your browser timezone. Open a post to see its saved timezone.</p>
+                <div id="calendarGrid" class="calendar"></div>
+            </section>
+            <section id="accounts" class="view" hidden>
+                <div class="section-heading">
+                    <h2>Your destinations</h2><span class="muted" id="accountCount"></span>
+                </div>
+                <div id="accountsList" class="account-grid"></div>
+                <form id="accountForm" class="panel account-form">
+                    <h2 id="accountFormTitle">Add an account</h2>
+                    <p class="muted">Create a local destination. This does not authorize or connect a Meta account.</p>
+                    <label for="accountName">Account name</label><input id="accountName" maxlength="80" required
+                        placeholder="e.g. My brand">
+                    <div class="two-cols">
+                        <div><label for="platform">Platform</label><select id="platform">
+                                <option value="facebook">Facebook Page</option>
+                                <option value="instagram">Instagram professional account</option>
+                            </select></div>
+                        <div><label for="externalId">Meta account / Page ID (optional)</label><input id="externalId"
+                                maxlength="150" placeholder="Add when configuring the API"></div>
+                    </div><button class="primary" id="accountSaveBtn">Add destination</button><button type="button"
+                        id="cancelAccountEdit" class="ghost" hidden>Cancel editing</button>
+                </form>
+            </section>
+            <section id="activity" class="view" hidden>
+                <h2>Delivery activity</h2>
+                <div id="activityList"></div>
+            </section>
+            <footer>Social Studio <span>Built for a more intentional publishing routine.</span></footer>
+        </main>
+    </div>
+    <div id="toast" role="status" hidden></div>
+</body>
+
+</html>
