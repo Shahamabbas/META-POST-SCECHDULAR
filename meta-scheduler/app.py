@@ -17,10 +17,11 @@ from urllib.parse import urlparse
 from integration import Publisher, IntegrationRequired, PublishRejected
 
 ROOT = Path(__file__).resolve().parent
-DATA = Path(os.environ.get('DATA_DIR', ROOT / 'data')).resolve()
+DATA = Path(os.environ.get('DATA_DIR', '/tmp/data' if os.environ.get('VERCEL') else ROOT / 'data')).resolve()
 DB = DATA / 'scheduler.sqlite3'
 SESSIONS = {}
 MAX_BODY = 36 * 1024 * 1024
+PASSWORD = os.environ.get('APP_PASSWORD', '')
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -324,6 +325,13 @@ class Handler(BaseHTTPRequestHandler):
             import traceback
             traceback.print_exc()
             return self.send(500,{'error':'Internal error. Check the server console.'})
+        finally:
+            pass
+
+# Platform entrypoint exports (Vercel, AWS Lambda, WSGI/ASGI adapters)
+handler = Handler
+app = Handler
+application = Handler
 
 if __name__=='__main__':
     PASSWORD = os.environ.get('APP_PASSWORD','')

@@ -14,7 +14,14 @@ class HTTPTests(unittest.TestCase):
         self.client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         self.csrf=''
     def tearDown(self):
-        self.server.shutdown();self.server.server_close();self.tmp.cleanup()
+        self.server.shutdown()
+        self.server.server_close()
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
     def call(self,path,body=None,csrf=True):
         headers={'Content-Type':'application/json'}
         if csrf:headers['X-CSRF-Token']=self.csrf

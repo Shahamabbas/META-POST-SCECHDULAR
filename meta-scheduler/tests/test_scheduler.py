@@ -16,7 +16,13 @@ class SchedulerTests(unittest.TestCase):
         with app.connect() as c:
             for i in range(3):
                 c.execute('INSERT INTO accounts VALUES(?,?,?,?)',(str(i),'Brand '+str(i),'facebook',''))
-    def tearDown(self): self.tmp.cleanup()
+    def tearDown(self):
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
     def body(self,**kw):
         return dict(caption='Test content',account_ids=['0','1','2'],timezone='Asia/Karachi',scheduled_at=(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),**kw)
     def due(self,pid):
