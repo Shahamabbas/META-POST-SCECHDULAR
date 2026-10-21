@@ -15,10 +15,13 @@ core = importlib.util.module_from_spec(spec)
 sys.modules["scheduler_core"] = core
 spec.loader.exec_module(core)
 
-Handler = core.Handler
-handler = core.Handler
-app = core.Handler
-application = core.Handler
+# Inherit handler from core.Handler for BaseHTTPRequestHandler support
+class handler(core.Handler):
+    pass
+
+Handler = handler
+app = handler
+application = handler
 init = core.init
 worker = core.worker
 
