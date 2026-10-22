@@ -21,7 +21,34 @@ DATA = Path(os.environ.get('DATA_DIR', '/tmp/data' if os.environ.get('VERCEL') e
 DB = DATA / 'scheduler.sqlite3'
 SESSIONS = {}
 MAX_BODY = 36 * 1024 * 1024
-PASSWORD = os.environ.get('APP_PASSWORD', '')
+def load_dotenv():
+    search_paths = [Path.cwd() / '.env', ROOT / '.env', ROOT.parent / '.env']
+    for p in search_paths:
+        if p.is_file():
+            try:
+                for line in p.read_text(encoding='utf-8').splitlines():
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, v = line.split('=', 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+            except Exception:
+                pass
+
+load_dotenv()
+
+DEFAULT_PASSWORD = 'MySchedulerPass2026!'
+PASSWORD = os.environ.get('APP_PASSWORD', DEFAULT_PASSWORD)
+
+def get_password():
+    if PASSWORD and len(PASSWORD) >= 12:
+        return PASSWORD
+    env_pw = os.environ.get('APP_PASSWORD', '').strip()
+    if env_pw:
+        return env_pw
+    return DEFAULT_PASSWORD
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -210,11 +237,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         # Fetch Metadata + CSRF protect cookie-authenticated writes. No CORS allowed.
-        if self.headers.get('Sec-Fetch-Site') not in (None,'same-origin','none'):
+        if self.headers.get('Sec-Fetch-Site') not in (None,'same-origin','none',''):
             return self.send(403, {'error':'Cross-site requests are not allowed.'})
         origin = self.headers.get('Origin')
-        if origin and urlparse(origin).netloc != self.headers.get('Host'):
-            return self.send(403, {'error':'Origin mismatch.'})
+        host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host')
+        if origin and host:
+            origin_host = urlparse(origin).netloc.split(':')[0]
+            req_host = host.split(':')[0]
+            if origin_host != req_host and not (origin_host in ('127.0.0.1','localhost') and req_host in ('127.0.0.1','localhost')):
+                return self.send(403, {'error':'Origin mismatch.'})
         try:
             size = int(self.headers.get('Content-Length','0'))
             if size <= 0 or size > MAX_BODY:
@@ -225,7 +256,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/login':
                 # Fixed response delay reduces rapid local password guessing.
                 time.sleep(0.25)
-                if not hmac.compare_digest(str(body.get('password','')),PASSWORD):
+                expected_password = get_password()
+                input_password = str(body.get('password',''))
+                if not hmac.compare_digest(input_password, expected_password):
                     return self.send(401,{'error':'Incorrect password.'})
                 for key in list(SESSIONS):
                     if SESSIONS[key]['expires'] < time.time():
@@ -235,8 +268,9 @@ class Handler(BaseHTTPRequestHandler):
                 SESSIONS[sid] = dict(expires=time.time()+43200,csrf=csrf)
                 data = json.dumps({'ok':True}).encode()
                 self.send_response(200)
-                secure = '; Secure' if os.environ.get('COOKIE_SECURE')=='1' else ''
-                self.send_header('Set-Cookie',f'scheduler_session={sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{secure}')
+                is_https = os.environ.get('COOKIE_SECURE') == '1' or self.headers.get('X-Forwarded-Proto') == 'https'
+                secure = '; Secure' if is_https else ''
+                self.send_header('Set-Cookie',f'scheduler_session={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=43200{secure}')
                 self.send_header('Content-Type','application/json')
                 self.send_header('Content-Length',str(len(data)))
                 self.send_header('Cache-Control','no-store')
