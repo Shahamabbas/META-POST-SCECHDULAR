@@ -1,40 +1,380 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let state = { accounts: [], posts: [], events: [] }, csrf = '', editId = null, media = null, uploading = false, currentView = 'overview', editAccountId = null;
+let state = { accounts: [], posts: [], events: [], meta_configured: false }, csrf = '', editId = null, media = null, uploading = false, currentView = 'overview', editAccountId = null;
 let month = new Date(); month.setDate(1);
 const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const badge = s => `<span class="badge ${esc(s)}">${esc(s === 'blocked' ? 'Integration required' : s)}</span>`;
+const badge = s => `<span class="badge ${esc(s)}">${esc(s === 'blocked' ? 'Pending Config' : s)}</span>`;
 let toastTimer;
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6500); }
 async function api(path, body) { const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf } : {}, body: body ? JSON.stringify(body) : undefined }); const data = await r.json(); if (!r.ok) { if (r.status === 401 && path != '/api/login') { $('workspace').hidden = true; $('login').hidden = false; } throw Error(data.error || 'Request failed.'); } return data; }
 function title(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-function show(view) { currentView = view; document.querySelectorAll('.view').forEach(el => el.hidden = el.id !== view); document.querySelectorAll('.nav').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('viewTitle').textContent = { overview: 'Your publishing workspace', compose: 'Turn an idea into a post', queue: 'Your content, organized', calendar: 'A clear view of what’s next', accounts: 'Manage your destinations', activity: 'Every delivery, in view' }[view]; if (view === 'calendar') renderCalendar(); }
+
+function show(view) {
+    if (currentView === view && !$(view)?.hidden) return;
+    document.querySelectorAll('.view').forEach(el => el.hidden = el.id !== view);
+    document.querySelectorAll('.nav').forEach(el => el.classList.toggle('active', el.dataset.view === view));
+    const titles = {
+        overview: 'Your publishing workspace',
+        compose: 'Turn an idea into a post',
+        queue: 'Your content, organized',
+        calendar: 'A clear view of what’s next',
+        accounts: 'Manage your destinations',
+        activity: 'Every delivery, in view'
+    };
+    $('viewTitle').textContent = titles[view] || 'Your publishing workspace';
+    currentView = view;
+    if (view === 'calendar') renderCalendar();
+}
+
 function dateLabel(p) { if (!p.scheduled_at) return 'Unscheduled draft'; return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: p.timezone }).format(new Date(p.scheduled_at)) + ' · ' + p.timezone; }
 function status(p) { if (p.state === 'draft' || p.state === 'cancelled') return p.state; let s = p.deliveries.map(d => d.status); if (s.every(x => x === 'published')) return 'published'; if (s.some(x => ['blocked', 'failed', 'unknown'].includes(x))) return 'attention'; if (s.includes('publishing')) return 'publishing'; return 'pending'; }
 function card(p) { const editable = ['draft', 'scheduled'].includes(p.state) && p.deliveries.every(d => ['pending', 'cancelled'].includes(d.status)); return `<article class="post-card"><div class="post-top"><span class="muted fine">${esc(dateLabel(p))}</span>${badge(status(p))}</div><p class="post-copy">${esc(p.caption)}</p>${p.media ? `<p class="muted fine">Attachment: ${esc(p.media.name)}</p>` : ''}${p.deliveries.map(d => `<div class="delivery"><strong>${esc(d.name)}</strong><span class="muted">${title(d.platform)}</span>${badge(d.status)}${['failed', 'blocked', 'unknown'].includes(d.status) && p.state !== 'cancelled' ? `<button class="ghost" data-action="retry" data-id="${d.id}" data-status="${d.status}">Retry delivery</button>` : ''}${d.error ? `<span class="err">${esc(d.error)}</span>` : ''}${d.external_post_id ? `<span class="muted">Remote ID: ${esc(d.external_post_id)}</span>` : ''}</div>`).join('')}<div class="card-actions">${editable ? `<button class="secondary" data-action="edit" data-id="${p.id}">${p.state === 'draft' ? 'Edit & schedule' : 'Edit post'}</button>` : ''}<button class="ghost" data-action="duplicate" data-id="${p.id}">Duplicate</button>${p.state !== 'cancelled' && !p.deliveries.some(d => d.status === 'publishing') && p.deliveries.some(d => d.status !== 'published') ? `<button class="ghost" data-action="cancel" data-id="${p.id}">Cancel remaining</button>` : ''}</div></article>`; }
-function render() { let counts = { pending: 0, draft: 0, published: 0, attention: 0 }; state.posts.forEach(p => { let s = status(p); if (s in counts) counts[s]++; }); $('stats').innerHTML = [['Scheduled posts', counts.pending], ['Drafts to develop', counts.draft], ['Fully published', counts.published], ['Need attention', counts.attention]].map(([label, n]) => `<div class="stat"><span>${label}</span><strong>${n.toString().padStart(2, '0')}</strong></div>`).join(''); let upcoming = state.posts.filter(p => status(p) === 'pending').sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at)).slice(0, 3); $('upcoming').innerHTML = upcoming.length ? upcoming.map(card).join('') : '<div class="empty">Your next post belongs here. Create a post to start planning.</div>'; renderQueue(); renderAccounts(); $('activityList').innerHTML = state.events.length ? state.events.map(e => `<div class="event">${esc(e.message)}<small>${esc(new Date(e.created_at).toLocaleString())} · Delivery ${esc(e.delivery_id)}</small></div>`).join('') : '<div class="empty">Delivery events will appear here when a scheduled post is processed.</div>'; if (currentView === 'calendar') renderCalendar(); }
+
+function render() {
+    let counts = { pending: 0, draft: 0, published: 0, attention: 0 };
+    state.posts.forEach(p => { let s = status(p); if (s in counts) counts[s]++; });
+    $('stats').innerHTML = [['Scheduled posts', counts.pending], ['Drafts to develop', counts.draft], ['Fully published', counts.published], ['Need attention', counts.attention]].map(([label, n]) => `<div class="stat"><span>${label}</span><strong>${n.toString().padStart(2, '0')}</strong></div>`).join('');
+    let upcoming = state.posts.filter(p => status(p) === 'pending').sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at)).slice(0, 3);
+    $('upcoming').innerHTML = upcoming.length ? upcoming.map(card).join('') : '<div class="empty">Your next post belongs here. Create a post to start planning.</div>';
+
+    // Dynamic Meta API status banner
+    const hasMeta = state.meta_configured || state.accounts.some(a => a.external_id && (a.external_id.includes(':') || a.external_id.includes('|') || a.external_id.length > 5));
+    const notice = $('metaNotice');
+    if (notice) {
+        if (hasMeta) {
+            notice.className = 'notice connected';
+            $('metaNoticeTitle').textContent = 'Meta API Ready';
+            $('metaNoticeDesc').textContent = 'Facebook Pages API is configured. Scheduled posts will publish automatically to your connected destinations.';
+        } else {
+            notice.className = 'notice';
+            $('metaNoticeTitle').textContent = 'Meta API Setup';
+            $('metaNoticeDesc').textContent = 'Add your Meta Page ID and Page Access Token under Accounts (e.g. PAGE_ID:TOKEN) or in .env to connect your page.';
+        }
+    }
+
+    renderQueue();
+    renderAccounts();
+    $('activityList').innerHTML = state.events.length ? state.events.map(e => `<div class="event">${esc(e.message)}<small>${esc(new Date(e.created_at).toLocaleString())} · Delivery ${esc(e.delivery_id)}</small></div>`).join('') : '<div class="empty">Delivery events will appear here when a scheduled post is processed.</div>';
+    if (currentView === 'calendar') renderCalendar();
+}
+
 function renderQueue() { let f = $('queueFilter').value; let posts = state.posts.filter(p => f === 'all' || status(p) === f); $('queueList').innerHTML = posts.length ? posts.map(card).join('') : '<div class="empty">No posts in this view yet.</div>'; }
-function renderAccounts() { let selected = [...document.querySelectorAll('[name=account]:checked')].map(el => el.value); $('accountCount').textContent = state.accounts.length + ' / 3 destinations'; $('accountsList').innerHTML = state.accounts.map(a => `<div class="account-card"><div class="avatar">${a.platform === 'facebook' ? 'f' : '◎'}</div><h3>${esc(a.name)}</h3><p class="muted fine">${a.platform === 'facebook' ? 'Facebook Page' : 'Instagram professional account'}</p>${badge('blocked')}<p class="fine muted">${a.external_id ? 'ID: ' + esc(a.external_id) : 'No remote ID saved'}</p><button class="ghost" data-action="editAccount" data-id="${a.id}">Edit details</button><button class="ghost" data-action="deleteAccount" data-id="${a.id}">Remove destination</button></div>`).join(''); $('accountChoices').innerHTML = state.accounts.length ? state.accounts.map(a => `<label class="choice"><input name="account" type="checkbox" value="${a.id}" ${selected.includes(a.id) ? 'checked' : ''}>${esc(a.name)} · ${a.platform === 'facebook' ? 'FB' : 'IG'}</label>`).join('') : '<p class="muted fine">Add a destination in Accounts before creating a post.</p>'; }
-function renderCalendar() { let y = month.getFullYear(), m = month.getMonth(); $('monthTitle').textContent = month.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }); let first = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m + 1, 0).getDate(); let html = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(s => `<div class="weekday">${s}</div>`).join(''); for (let i = 0; i < first; i++)html += '<div class="day"></div>'; for (let d = 1; d <= days; d++) { let day = new Date(y, m, d); let posts = state.posts.filter(p => p.scheduled_at && p.state !== 'cancelled' && new Date(p.scheduled_at).toDateString() === day.toDateString()); html += `<div class="day ${day.toDateString() === new Date().toDateString() ? 'today' : ''}">${d}${posts.map(p => `<button class="cal-post" data-action="open" data-id="${p.id}" title="${esc(p.caption)}">${esc(new Date(p.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))} ${esc(p.caption)}</button>`).join('')}</div>`; } let trailing = (7 - (first + days) % 7) % 7; html += '<div class="day"></div>'.repeat(trailing); $('calendarGrid').innerHTML = html; }
+
+function renderAccounts() {
+    let selected = [...document.querySelectorAll('[name=account]:checked')].map(el => el.value);
+    $('accountCount').textContent = state.accounts.length + ' / 3 destinations';
+    $('accountsList').innerHTML = state.accounts.map(a => {
+        const hasToken = (a.external_id && (a.external_id.includes(':') || a.external_id.includes('|'))) || state.meta_configured;
+        const statusBadge = hasToken 
+            ? `<span class="badge connected">Connected</span>` 
+            : (a.external_id ? `<span class="badge publishing">ID Added</span>` : `<span class="badge failed">Token Required</span>`);
+        const displayId = a.external_id 
+            ? (a.external_id.includes(':') ? esc(a.external_id.split(':')[0]) + ' · Token configured' : esc(a.external_id))
+            : 'No Page ID saved';
+        return `<div class="account-card"><div class="avatar">${a.platform === 'facebook' ? 'f' : '◎'}</div><h3>${esc(a.name)}</h3><p class="muted fine">${a.platform === 'facebook' ? 'Facebook Page' : 'Instagram professional account'}</p>${statusBadge}<p class="fine muted">ID: ${displayId}</p><button class="ghost" data-action="editAccount" data-id="${a.id}">Edit details</button><button class="ghost" data-action="deleteAccount" data-id="${a.id}">Remove destination</button></div>`;
+    }).join('');
+    $('accountChoices').innerHTML = state.accounts.length ? state.accounts.map(a => `<label class="choice"><input name="account" type="checkbox" value="${a.id}" ${selected.includes(a.id) ? 'checked' : ''}>${esc(a.name)} · ${a.platform === 'facebook' ? 'FB' : 'IG'}</label>`).join('') : '<p class="muted fine">Add a destination in Accounts before creating a post.</p>';
+}
+
+function renderCalendar() {
+    let y = month.getFullYear(), m = month.getMonth();
+    $('monthTitle').textContent = month.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+    let first = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m + 1, 0).getDate();
+    let html = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(s => `<div class="weekday">${s}</div>`).join('');
+    for (let i = 0; i < first; i++) html += '<div class="day"></div>';
+    for (let d = 1; d <= days; d++) {
+        let day = new Date(y, m, d);
+        let posts = state.posts.filter(p => p.scheduled_at && p.state !== 'cancelled' && new Date(p.scheduled_at).toDateString() === day.toDateString());
+        html += `<div class="day ${day.toDateString() === new Date().toDateString() ? 'today' : ''}">${d}${posts.map(p => `<button class="cal-post" data-action="open" data-id="${p.id}" title="${esc(p.caption)}">${esc(new Date(p.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))} ${esc(p.caption)}</button>`).join('')}</div>`;
+    }
+    let trailing = (7 - (first + days) % 7) % 7;
+    html += '<div class="day"></div>'.repeat(trailing);
+    $('calendarGrid').innerHTML = html;
+}
+
 async function refresh() { state = await api('/api/state'); csrf = state.csrf; $('login').hidden = true; $('workspace').hidden = false; render(); }
-function reset() { editId = null; media = null; $('postForm').reset(); $('composeTitle').textContent = 'Create a post'; $('scheduleBtn').textContent = 'Schedule post →'; $('zone').value = browserZone; defaultTime(); $('mediaName').textContent = ''; $('removeMedia').hidden = true; preview(); }
-function defaultTime() { let d = new Date(Date.now() + 3600000); d.setSeconds(0, 0); $('scheduleTime').value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
-function preview() { let selected = [...document.querySelectorAll('[name=account]:checked')].map(el => state.accounts.find(a => a.id === el.value)?.name); $('previewAccount').textContent = selected[0] || 'Your account'; $('previewCaption').textContent = $('caption').value || 'Your caption will appear here.'; $('charCount').textContent = $('caption').value.length + ' / 2200'; $('previewMedia').className = media ? '' : 'preview-placeholder'; if (media) { $('previewMedia').replaceChildren(); let el = document.createElement(media.mime.startsWith('video/') ? 'video' : 'img'); el.src = '/media/' + media.id; if (el.tagName === 'VIDEO') el.controls = true; else el.alt = 'Post attachment preview'; $('previewMedia').append(el); } else $('previewMedia').innerHTML = '✳<span>Your next story starts here.</span>'; }
+
+function reset() {
+    editId = null;
+    media = null;
+    $('postForm').reset();
+    $('composeTitle').textContent = 'Create a post';
+    $('scheduleBtn').textContent = 'Schedule post →';
+    $('zone').value = browserZone;
+    defaultTime();
+    $('mediaName').textContent = '';
+    $('removeMedia').hidden = true;
+    preview();
+}
+
+function defaultTime() {
+    let d = new Date(Date.now() + 3600000);
+    d.setSeconds(0, 0);
+    $('scheduleTime').value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function preview() {
+    let selected = [...document.querySelectorAll('[name=account]:checked')].map(el => state.accounts.find(a => a.id === el.value)?.name);
+    $('previewAccount').textContent = selected[0] || 'Your account';
+    $('previewCaption').textContent = $('caption').value || 'Your caption will appear here.';
+    $('charCount').textContent = $('caption').value.length + ' / 2200';
+    $('previewMedia').className = media ? '' : 'preview-placeholder';
+    if (media) {
+        $('previewMedia').replaceChildren();
+        let el = document.createElement(media.mime.startsWith('video/') ? 'video' : 'img');
+        el.src = '/media/' + media.id;
+        if (el.tagName === 'VIDEO') el.controls = true;
+        else el.alt = 'Post attachment preview';
+        $('previewMedia').append(el);
+    } else {
+        $('previewMedia').innerHTML = '✳<span>Your next story starts here.</span>';
+    }
+}
+
 // Match wall-clock time against the selected IANA zone. Reject DST gaps AND ambiguous times.
-function utcTime(value, zone) { if (!value) throw Error('Choose a publish date and time.'); let base = Date.parse(value + 'Z'); let fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); let matches = []; for (let offset = -14 * 60; offset <= 14 * 60; offset += 15) { let dt = new Date(base + offset * 60000); if (fmt.format(dt).replace(' ', 'T') === value) matches.push(dt); } if (matches.length !== 1) throw Error('This time is missing or ambiguous because of daylight saving. Choose a different time or use UTC.'); return matches[0].toISOString(); }
-async function save(draft) { if (uploading) throw Error('Wait for your media upload to finish.'); let body = { caption: $('caption').value, account_ids: [...document.querySelectorAll('[name=account]:checked')].map(el => el.value), media_id: media?.id || null, timezone: $('zone').value, draft, scheduled_at: draft ? null : utcTime($('scheduleTime').value, $('zone').value) }; if (editId) body.id = editId; await api('/api/posts', body); reset(); await refresh(); show('queue'); toast(draft ? 'Draft saved.' : 'Post scheduled. Publishing requires your Meta adapter.'); }
-function loadPost(p, duplicate = false) { reset(); editId = duplicate ? null : p.id; media = p.media; $('caption').value = p.caption; document.querySelectorAll('[name=account]').forEach(el => el.checked = p.deliveries.some(d => d.account_id === el.value)); $('zone').value = p.timezone; if (p.scheduled_at && !duplicate) { let fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: p.timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); $('scheduleTime').value = fmt.format(new Date(p.scheduled_at)).replace(' ', 'T'); } if (media) { $('mediaName').textContent = media.name; $('removeMedia').hidden = false; } $('composeTitle').textContent = duplicate ? 'Duplicate post' : 'Edit post'; preview(); show('compose'); }
-document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => show(b.dataset.view));['newPost', 'heroCompose'].forEach(id => $(id).onclick = () => { reset(); show('compose'); }); $('seeQueue').onclick = () => show('queue'); $('queueFilter').onchange = renderQueue; $('caption').oninput = preview; $('accountChoices').onchange = preview; $('resetPost').onclick = reset;
-$('loginForm').onsubmit = async e => { e.preventDefault(); try { await api('/api/login', { password: $('password').value }); $('password').value = ''; $('loginError').textContent = ''; await refresh(); } catch (err) { $('loginError').textContent = err.message; } };
-$('logout').onclick = async () => { try { await api('/api/logout', {}); location.reload(); } catch (e) { toast(e.message); } };
-$('postForm').onsubmit = async e => { e.preventDefault(); $('scheduleBtn').disabled = true; try { await save(false); } catch (err) { toast(err.message); } finally { $('scheduleBtn').disabled = false; } };
-$('saveDraft').onclick = async () => { $('saveDraft').disabled = true; try { await save(true); } catch (err) { toast(err.message); } finally { $('saveDraft').disabled = false; } };
-function clearAccountForm() { editAccountId = null; $('accountForm').reset(); $('platform').disabled = false; $('accountFormTitle').textContent = 'Add an account'; $('accountSaveBtn').textContent = 'Add destination'; $('cancelAccountEdit').hidden = true; }
+function utcTime(value, zone) {
+    if (!value) throw Error('Choose a publish date and time.');
+    let base = Date.parse(value + 'Z');
+    let fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    let matches = [];
+    for (let offset = -14 * 60; offset <= 14 * 60; offset += 15) {
+        let dt = new Date(base + offset * 60000);
+        if (fmt.format(dt).replace(' ', 'T') === value) matches.push(dt);
+    }
+    if (matches.length !== 1) throw Error('This time is missing or ambiguous because of daylight saving. Choose a different time or use UTC.');
+    return matches[0].toISOString();
+}
+
+async function save(draft) {
+    if (uploading) throw Error('Wait for your media upload to finish.');
+    let body = {
+        caption: $('caption').value,
+        account_ids: [...document.querySelectorAll('[name=account]:checked')].map(el => el.value),
+        media_id: media?.id || null,
+        timezone: $('zone').value,
+        draft,
+        scheduled_at: draft ? null : utcTime($('scheduleTime').value, $('zone').value)
+    };
+    if (editId) body.id = editId;
+    await api('/api/posts', body);
+    reset();
+    await refresh();
+    show('queue');
+    toast(draft ? 'Draft saved.' : 'Post scheduled successfully.');
+}
+
+function loadPost(p, duplicate = false) {
+    reset();
+    editId = duplicate ? null : p.id;
+    media = p.media;
+    $('caption').value = p.caption;
+    document.querySelectorAll('[name=account]').forEach(el => el.checked = p.deliveries.some(d => d.account_id === el.value));
+    $('zone').value = p.timezone;
+    if (p.scheduled_at && !duplicate) {
+        let fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: p.timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+        $('scheduleTime').value = fmt.format(new Date(p.scheduled_at)).replace(' ', 'T');
+    }
+    if (media) {
+        $('mediaName').textContent = media.name;
+        $('removeMedia').hidden = false;
+    }
+    $('composeTitle').textContent = duplicate ? 'Duplicate post' : 'Edit post';
+    preview();
+    show('compose');
+}
+
+// Navigation event listeners with requestAnimationFrame to prevent INP blocking
+document.querySelectorAll('[data-view]').forEach(b => {
+    b.onclick = () => requestAnimationFrame(() => show(b.dataset.view));
+});
+
+['newPost', 'heroCompose'].forEach(id => {
+    const btn = $(id);
+    if (btn) {
+        btn.onclick = () => {
+            requestAnimationFrame(() => {
+                reset();
+                show('compose');
+            });
+        };
+    }
+});
+
+$('seeQueue').onclick = () => requestAnimationFrame(() => show('queue'));
+$('queueFilter').onchange = renderQueue;
+$('caption').oninput = preview;
+$('accountChoices').onchange = preview;
+$('resetPost').onclick = reset;
+
+$('loginForm').onsubmit = async e => {
+    e.preventDefault();
+    try {
+        await api('/api/login', { password: $('password').value });
+        $('password').value = '';
+        $('loginError').textContent = '';
+        await refresh();
+    } catch (err) {
+        $('loginError').textContent = err.message;
+    }
+};
+
+$('logout').onclick = async () => {
+    try {
+        await api('/api/logout', {});
+        location.reload();
+    } catch (e) {
+        toast(e.message);
+    }
+};
+
+$('postForm').onsubmit = async e => {
+    e.preventDefault();
+    $('scheduleBtn').disabled = true;
+    try {
+        await save(false);
+    } catch (err) {
+        toast(err.message);
+    } finally {
+        $('scheduleBtn').disabled = false;
+    }
+};
+
+$('saveDraft').onclick = async () => {
+    $('saveDraft').disabled = true;
+    try {
+        await save(true);
+    } catch (err) {
+        toast(err.message);
+    } finally {
+        $('saveDraft').disabled = false;
+    }
+};
+
+function clearAccountForm() {
+    editAccountId = null;
+    $('accountForm').reset();
+    $('platform').disabled = false;
+    $('accountFormTitle').textContent = 'Add an account';
+    $('accountSaveBtn').textContent = 'Add destination';
+    $('cancelAccountEdit').hidden = true;
+}
+
 $('cancelAccountEdit').onclick = clearAccountForm;
-$('accountForm').onsubmit = async e => { e.preventDefault(); try { await api('/api/accounts', { name: $('accountName').value, platform: $('platform').value, external_id: $('externalId').value, id: editAccountId }); clearAccountForm(); await refresh(); toast('Destination saved. Connect it in your Meta adapter.'); } catch (err) { toast(err.message); } };
-$('mediaFile').onchange = async () => { const f = $('mediaFile').files[0]; if (!f) return; if (f.size > 25 * 1024 * 1024) { toast('Maximum upload size is 25 MB.'); $('mediaFile').value = ''; return; } uploading = true; $('mediaName').textContent = 'Uploading…'; try { const data = await new Promise((resolve, reject) => { let r = new FileReader(); r.onload = () => resolve(r.result.split(',')[1]); r.onerror = () => reject(Error('Could not read file.')); r.readAsDataURL(f); }); media = await api('/api/media', { name: f.name, data }); $('mediaName').textContent = media.name; $('removeMedia').hidden = false; preview(); } catch (err) { toast(err.message); $('mediaName').textContent = media?.name || ''; } finally { uploading = false; } };
-$('removeMedia').onclick = () => { media = null; $('mediaFile').value = ''; $('mediaName').textContent = ''; $('removeMedia').hidden = true; preview(); };
-$('previousMonth').onclick = () => { month.setMonth(month.getMonth() - 1); renderCalendar(); }; $('nextMonth').onclick = () => { month.setMonth(month.getMonth() + 1); renderCalendar(); };
-document.addEventListener('click', async e => { let b = e.target.closest('[data-action]'); if (!b) return; const { action, id } = b.dataset; b.disabled = true; try { let p = state.posts.find(p => p.id === id); if (action === 'edit' || action === 'duplicate') { loadPost(p, action === 'duplicate'); } else if (action === 'cancel') { if (confirm('Cancel all remaining deliveries for this post? Published posts will remain on their platforms.')) { await api('/api/posts/cancel', { id }); await refresh(); toast('Remaining deliveries cancelled.'); } } else if (action === 'retry') { let verified = b.dataset.status === 'unknown'; if (!confirm(verified ? 'Verify the destination account first. Are you certain this post was NOT published? Retrying can duplicate a post.' : 'Retry this destination? Make sure the integration issue is resolved.')) return; await api('/api/deliveries/retry', { id, verified_not_published: verified }); await refresh(); toast('Delivery queued for retry.'); } else if (action === 'editAccount') { const a = state.accounts.find(a => a.id === id); editAccountId = a.id; $('accountName').value = a.name; $('platform').value = a.platform; $('platform').disabled = true; $('externalId').value = a.external_id; $('accountFormTitle').textContent = 'Edit destination'; $('accountSaveBtn').textContent = 'Save changes'; $('cancelAccountEdit').hidden = false; $('accountForm').scrollIntoView({ behavior: 'smooth' }); } else if (action === 'deleteAccount') { if (confirm('Remove this local destination?')) { await api('/api/accounts/delete', { id }); await refresh(); } } else if (action === 'open') { $('queueFilter').value = 'all'; renderQueue(); show('queue'); let target = [...$('queueList').querySelectorAll('[data-id]')].find(x => x.dataset.id === id); target?.closest('article')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } } catch (err) { toast(err.message); } finally { b.disabled = false; } });
-let zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Karachi', 'Europe/London', 'America/New_York']; zones = [...new Set(['UTC', browserZone, ...zones])]; $('zone').innerHTML = zones.map(z => `<option value="${esc(z)}">${esc(z)}</option>`).join(''); reset(); refresh().catch(() => { }); setInterval(() => { if (!$('workspace').hidden) refresh().catch(e => toast(e.message)); }, 15000);
+
+$('accountForm').onsubmit = async e => {
+    e.preventDefault();
+    try {
+        await api('/api/accounts', {
+            name: $('accountName').value,
+            platform: $('platform').value,
+            external_id: $('externalId').value,
+            id: editAccountId
+        });
+        clearAccountForm();
+        await refresh();
+        toast('Destination saved and connected to Meta API.');
+    } catch (err) {
+        toast(err.message);
+    }
+};
+
+$('mediaFile').onchange = async () => {
+    const f = $('mediaFile').files[0];
+    if (!f) return;
+    if (f.size > 25 * 1024 * 1024) {
+        toast('Maximum upload size is 25 MB.');
+        $('mediaFile').value = '';
+        return;
+    }
+    uploading = true;
+    $('mediaName').textContent = 'Uploading…';
+    try {
+        const data = await new Promise((resolve, reject) => {
+            let r = new FileReader();
+            r.onload = () => resolve(r.result.split(',')[1]);
+            r.onerror = () => reject(Error('Could not read file.'));
+            r.readAsDataURL(f);
+        });
+        media = await api('/api/media', { name: f.name, data });
+        $('mediaName').textContent = media.name;
+        $('removeMedia').hidden = false;
+        preview();
+    } catch (err) {
+        toast(err.message);
+        $('mediaName').textContent = media?.name || '';
+    } finally {
+        uploading = false;
+    }
+};
+
+$('removeMedia').onclick = () => {
+    media = null;
+    $('mediaFile').value = '';
+    $('mediaName').textContent = '';
+    $('removeMedia').hidden = true;
+    preview();
+};
+
+$('previousMonth').onclick = () => { month.setMonth(month.getMonth() - 1); renderCalendar(); };
+$('nextMonth').onclick = () => { month.setMonth(month.getMonth() + 1); renderCalendar(); };
+
+document.addEventListener('click', async e => {
+    let b = e.target.closest('[data-action]');
+    if (!b) return;
+    const { action, id } = b.dataset;
+    b.disabled = true;
+    try {
+        let p = state.posts.find(p => p.id === id);
+        if (action === 'edit' || action === 'duplicate') {
+            loadPost(p, action === 'duplicate');
+        } else if (action === 'cancel') {
+            if (confirm('Cancel all remaining deliveries for this post? Published posts will remain on their platforms.')) {
+                await api('/api/posts/cancel', { id });
+                await refresh();
+                toast('Remaining deliveries cancelled.');
+            }
+        } else if (action === 'retry') {
+            let verified = b.dataset.status === 'unknown';
+            if (!confirm(verified ? 'Verify the destination account first. Are you certain this post was NOT published? Retrying can duplicate a post.' : 'Retry this destination? Make sure the integration issue is resolved.')) return;
+            await api('/api/deliveries/retry', { id, verified_not_published: verified });
+            await refresh();
+            toast('Delivery queued for retry.');
+        } else if (action === 'editAccount') {
+            const a = state.accounts.find(a => a.id === id);
+            editAccountId = a.id;
+            $('accountName').value = a.name;
+            $('platform').value = a.platform;
+            $('platform').disabled = true;
+            $('externalId').value = a.external_id;
+            $('accountFormTitle').textContent = 'Edit destination';
+            $('accountSaveBtn').textContent = 'Save changes';
+            $('cancelAccountEdit').hidden = false;
+            $('accountForm').scrollIntoView({ behavior: 'smooth' });
+        } else if (action === 'deleteAccount') {
+            if (confirm('Remove this local destination?')) {
+                await api('/api/accounts/delete', { id });
+                await refresh();
+            }
+        } else if (action === 'open') {
+            $('queueFilter').value = 'all';
+            renderQueue();
+            show('queue');
+            let target = [...$('queueList').querySelectorAll('[data-id]')].find(x => x.dataset.id === id);
+            target?.closest('article')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    } catch (err) {
+        toast(err.message);
+    } finally {
+        b.disabled = false;
+    }
+});
+
+let zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Karachi', 'Europe/London', 'America/New_York'];
+zones = [...new Set(['UTC', browserZone, ...zones])];
+$('zone').innerHTML = zones.map(z => `<option value="${esc(z)}">${esc(z)}</option>`).join('');
+reset();
+refresh().catch(() => {});
+setInterval(() => {
+    if (!$('workspace').hidden) refresh().catch(e => toast(e.message));
+}, 15000);

@@ -225,7 +225,17 @@ class Handler(BaseHTTPRequestHandler):
                     p['deliveries'] = [dict(r) for r in c.execute('SELECT d.*,a.name,a.platform FROM deliveries d JOIN accounts a ON d.account_id=a.id WHERE post_id=?', (p['id'],))]
                     p['media'] = dict(c.execute('SELECT * FROM media WHERE id=?',(p['media_id'],)).fetchone()) if p['media_id'] else None
                 events = [dict(r) for r in c.execute('SELECT * FROM events ORDER BY id DESC LIMIT 50')]
-            return self.send(200,dict(accounts=accounts,posts=posts,events=events,csrf=session['csrf'],integration='not configured; implement integration.py'))
+            meta_configured = bool(os.environ.get('FB_PAGE_ACCESS_TOKEN') or os.environ.get('META_ACCESS_TOKEN'))
+            if not meta_configured:
+                meta_configured = any(a.get('external_id') and (':' in a['external_id'] or '|' in a['external_id']) for a in accounts)
+            return self.send(200,dict(
+                accounts=accounts,
+                posts=posts,
+                events=events,
+                csrf=session['csrf'],
+                integration='connected' if meta_configured else 'pending_credentials',
+                meta_configured=meta_configured
+            ))
         if path.startswith('/media/'):
             mid = path[7:]
             with connect() as c:
