@@ -298,11 +298,11 @@ class Handler(BaseHTTPRequestHandler):
                         old=c.execute('SELECT platform FROM accounts WHERE id=?',(body['id'],)).fetchone()
                         if old['platform'] != platform:
                             raise ValueError('Account platform cannot change. Create a different destination instead.')
-                        c.execute('UPDATE accounts SET name=?,external_id=? WHERE id=?',(name,str(body.get('external_id','')).strip()[:150],body['id']))
+                        c.execute('UPDATE accounts SET name=?,external_id=? WHERE id=?',(name,str(body.get('external_id','')).strip()[:1000],body['id']))
                         return self.send(200,{'ok':True})
                     if c.execute('SELECT count(*) FROM accounts').fetchone()[0]>=3:
                         raise ValueError('This workspace supports three accounts. Remove an unused account first.')
-                    c.execute('INSERT INTO accounts VALUES(?,?,?,?)',(secrets.token_hex(12),name,platform,str(body.get('external_id','')).strip()[:150]))
+                    c.execute('INSERT INTO accounts VALUES(?,?,?,?)',(secrets.token_hex(12),name,platform,str(body.get('external_id','')).strip()[:1000]))
             elif path == '/api/accounts/delete':
                 with connect() as c:
                     if c.execute('SELECT 1 FROM deliveries WHERE account_id=?',(body.get('id'),)).fetchone():
